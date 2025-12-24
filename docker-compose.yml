@@ -30,7 +30,9 @@ services:
       - "4001:8000"
     environment:
       - DATABASE_URL=mysql+pymysql://root:root@user_db:3306/user_service_db
-      - SECRET_KEY=rahasia123
+      # TAMBAHKAN INI (Pastikan sama persis di semua service)
+      - SECRET_KEY=kunci_rahasia_project_ini_harus_sama_semua
+      - ALGORITHM=HS256
     depends_on:
       - user_db
     networks:
@@ -91,6 +93,9 @@ services:
       - "4003:8000"
     environment:
       - DATABASE_URL=mysql+pymysql://root:root@order_db:3306/order_service_db
+      # TAMBAHKAN INI (Harus SAMA PERSIS dengan User Service)
+      - SECRET_KEY=kunci_rahasia_project_ini_harus_sama_semua
+      - ALGORITHM=HS256
     depends_on:
       - order_db
     networks:
@@ -149,8 +154,12 @@ services:
     container_name: driver-service
     ports:
       - "4005:8000"
+    volumes:
+      - ./driver-service:/app
     environment:
       - DATABASE_URL=mysql+pymysql://root:root@driver_db:3306/driver_service_db
+      - SECRET_KEY=kunci_rahasia_project_ini_harus_sama_semua
+      - ALGORITHM=HS256
     depends_on:
       - driver_db
     networks:

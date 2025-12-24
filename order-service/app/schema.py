@@ -1,239 +1,202 @@
 import strawberry
-import httpx
-import os
 from typing import List, Optional
-from datetime import datetime
+from strawberry.types import Info
 from sqlalchemy.orm import Session
 from .database import SessionLocal
 from .models import Order, OrderItem
+from datetime import datetime, timedelta
+from jose import jwt, JWTError
+import os
+import requests # UNTUK NEMBAK RESTAURANT SERVICE
 
-# --- INTEGRATION HELPER ---
-async def process_payment_with_doswallet(user_id: int, amount: float) -> dict:
-    url = os.getenv("DOSWALLET_API_URL")
-    if not url:
-        # MOCK FALLBACK jika DOSWALLET_API_URL tidak tersedia
-        return {
-            "success": True, 
-            "transactionId": f"MOCK-TRX-{int(datetime.now().timestamp())}", 
-            "message": "Payment Successful (Mock)"
-        }
-    
-    mutation = """
-    mutation Pay($userId: ID!, $amount: Float!) {
-        pay(userId: $userId, amount: $amount) {
-            success
-            transactionId
-            message
-        }
-    }
-    """
-    variables = {"userId": str(user_id), "amount": amount}
+# --- CONFIG ---
+SECRET_KEY = os.getenv("SECRET_KEY", "kunci_rahasia_project_ini_harus_sama_semua")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+RESTAURANT_SERVICE_URL = "http://restaurant-service:8000" # URL Docker
+
+def get_current_user_id(info: Info) -> int:
+    request = info.context.get("request")
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        raise Exception("Authorization header missing")
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.post(url, json={"query": mutation, "variables": variables})
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("data") and data["data"].get("pay"):
-                    return data["data"]["pay"]
-    except Exception as e:
-        print(f"Integration Error (Using Mock instead): {e}")
+        scheme, token = auth_header.split()
+        if scheme.lower() != "bearer":
+            raise Exception("Invalid authentication scheme")
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return int(payload.get("id"))
+    except Exception:
+        raise Exception("Invalid or expired token")
 
-    # MOCK FALLBACK
-    return {
-        "success": True, 
-        "transactionId": f"MOCK-TRX-{int(datetime.now().timestamp())}", 
-        "message": "Payment Successful (Mock)"
-    }
+# --- INPUT TYPES ---
+@strawberry.input
+class OrderItemInput:
+    menu_item_id: int
+    quantity: int
+    # Kita hapus input 'price' & 'name' manual, biar sistem yang ambil dari DB (Lebih Aman!)
 
-# --- TYPES & RESOLVERS ---
-
+# --- OUTPUT TYPES ---
 @strawberry.type
 class OrderItemType:
-    menu_id: int
-    menu_name: str
-    price: float
+    id: int
+    menu_item_name: str
     quantity: int
+    price: float
 
 @strawberry.type
 class OrderType:
     id: int
     user_id: int
     restaurant_id: int
-    address_id: int
-    total_price: float
     status: str
-    
+    total_price: float
+    external_payment_id: Optional[str] = "MOCK-TRX-123" 
+
     @strawberry.field
     def items(self) -> List[OrderItemType]:
         db = SessionLocal()
-        try:
-            items = db.query(OrderItem).filter(OrderItem.order_id == self.id).all()
-            return [
-                OrderItemType(
-                    menu_id=i.menu_item_id, menu_name=i.menu_item_name, 
-                    price=float(i.price), quantity=i.quantity
-                ) for i in items
-            ]
-        finally:
-            db.close()
+        items_db = db.query(OrderItem).filter(OrderItem.order_id == self.id).all()
+        db.close()
+        return [
+            OrderItemType(
+                id=i.id,
+                menu_item_name=i.menu_item_name,
+                quantity=i.quantity,
+                price=float(i.price)
+            ) for i in items_db
+        ]
 
-    @strawberry.field(name="userId")
-    def user_id_alias(self) -> int:
-        return self.user_id
-
-    @strawberry.field(name="restaurantId")
-    def restaurant_id_alias(self) -> int:
-        return self.restaurant_id
-
-    @strawberry.field(name="addressId")
-    def address_id_alias(self) -> int:
-        return self.address_id
-
-    @strawberry.field(name="total")
-    def total_alias(self) -> float:
-        return float(self.total_price)
-
+# --- RESOLVERS ---
 @strawberry.type
 class Query:
-    @strawberry.field(name="orders")
-    def all_orders(self) -> List[OrderType]:
-        db = SessionLocal()
-        try:
-            orders = db.query(Order).all()
-            return [
-                OrderType(
-                    id=o.id, user_id=o.user_id, restaurant_id=o.restaurant_id,
-                    address_id=o.address_id, total_price=float(o.total_price),
-                    status=o.status
-                ) for o in orders
-            ]
-        finally:
-            db.close()
-
-    @strawberry.field(name="orderById")
-    def order_by_id(self, id: int) -> Optional[OrderType]:
-        db = SessionLocal()
-        try:
-            order = db.query(Order).filter(Order.id == id).first()
-            if order:
-                return OrderType(
-                    id=order.id, user_id=order.user_id, restaurant_id=order.restaurant_id,
-                    address_id=order.address_id, total_price=float(order.total_price),
-                    status=order.status
-                )
-        finally:
-            db.close()
-        return None
-
-    @strawberry.field(name="userOrders")
-    def user_orders(self, user_id: int) -> List[OrderType]:
-        db = SessionLocal()
-        try:
-            orders = db.query(Order).filter(Order.user_id == user_id).all()
-            return [
-                OrderType(
-                    id=o.id, user_id=o.user_id, restaurant_id=o.restaurant_id,
-                    address_id=o.address_id, total_price=float(o.total_price),
-                    status=o.status
-                ) for o in orders
-            ]
-        finally:
-            db.close()
-
-    @strawberry.field(name="myOrders")
-    def my_orders(self, user_id: int) -> List[OrderType]:
-        db = SessionLocal()
-        try:
-            orders = db.query(Order).filter(Order.user_id == user_id).all()
-            return [
-                OrderType(
-                    id=o.id, user_id=o.user_id, restaurant_id=o.restaurant_id,
-                    address_id=o.address_id, total_price=float(o.total_price),
-                    status=o.status
-                ) for o in orders
-            ]
-        finally:
-            db.close()
-
     @strawberry.field
-    def order_by_id(self, id: int) -> Optional[OrderType]:
+    def order(self, id: int) -> Optional[OrderType]:
         db = SessionLocal()
-        try:
-            order = db.query(Order).filter(Order.id == id).first()
-            if order:
-                return OrderType(
-                    id=order.id, user_id=order.user_id, restaurant_id=order.restaurant_id,
-                    address_id=order.address_id, total_price=float(order.total_price),
-                    status=order.status
-                )
-        finally:
-            db.close()
+        order = db.query(Order).filter(Order.id == id).first()
+        db.close()
+        if order:
+            return OrderType(
+                id=order.id, user_id=order.user_id, restaurant_id=order.restaurant_id,
+                status=order.status, total_price=float(order.total_price)
+            )
         return None
+    
+    @strawberry.field
+    def my_orders(self, info: Info) -> List[OrderType]:
+        user_id = get_current_user_id(info)
+        db = SessionLocal()
+        orders = db.query(Order).filter(Order.user_id == user_id).all()
+        db.close()
+        return [
+            OrderType(
+                id=o.id, user_id=o.user_id, restaurant_id=o.restaurant_id,
+                status=o.status, total_price=float(o.total_price)
+            ) for o in orders
+        ]
 
-@strawberry.input
-class OrderItemInput:
-    menu_id: int
-    menu_name: str
-    price: float
-    quantity: int
-
+# --- MUTATION ---
 @strawberry.type
 class Mutation:
-    @strawberry.mutation(name="createOrder")
-    async def create_order(self, user_id: int, restaurant_id: int, address_id: int, items: List[OrderItemInput]) -> OrderType:
-        total = sum(item.price * item.quantity for item in items)
+    @strawberry.mutation
+    def create_order(
+        self,
+        info: Info,
+        restaurant_id: int, 
+        address_id: int, 
+        items: List[OrderItemInput]
+    ) -> OrderType:
         
-        # Payment Logic
-        payment_result = await process_payment_with_doswallet(user_id, total)
-        status = "PAID" if payment_result.get("success") else "CANCELLED"
-
+        user_id = get_current_user_id(info)
         db = SessionLocal()
+        
         try:
+            # --- LANGKAH 1: Validasi Stok & Harga ke Restaurant Service ---
+            validated_items = []
+            total_amount = 0
+            stock_update_payload = []
+
+            for item_input in items:
+                # Nembak API Internal Restaurant
+                try:
+                    res = requests.get(f"{RESTAURANT_SERVICE_URL}/internal/menu-items/{item_input.menu_item_id}")
+                    if res.status_code != 200:
+                        raise Exception(f"Menu Item ID {item_input.menu_item_id} not found")
+                    
+                    menu_data = res.json()
+                    
+                    # Cek Restoran (Pastikan item milik restoran yang benar)
+                    if menu_data['restaurant_id'] != restaurant_id:
+                         raise Exception(f"Menu {menu_data['name']} does not belong to this restaurant")
+
+                    # Cek Stok
+                    if menu_data['stock'] < item_input.quantity:
+                        raise Exception(f"Stock habis untuk {menu_data['name']}. Sisa: {menu_data['stock']}")
+
+                    # Hitung Total (Pakai harga dari DB, bukan input user -> Anti Cheat)
+                    item_total = menu_data['price'] * item_input.quantity
+                    total_amount += item_total
+                    
+                    validated_items.append({
+                        "id": menu_data['id'],
+                        "name": menu_data['name'],
+                        "price": menu_data['price'],
+                        "qty": item_input.quantity
+                    })
+                    
+                    stock_update_payload.append({
+                        "menu_item_id": menu_data['id'],
+                        "quantity": item_input.quantity
+                    })
+                    
+                except requests.exceptions.ConnectionError:
+                    raise Exception("Failed to connect to Restaurant Service")
+
+            # --- LANGKAH 2: Kurangi Stok (Reservasi Stok) ---
+            # Kita kurangi stok SAAT order dibuat agar tidak ada race condition
+            res_stock = requests.post(
+                f"{RESTAURANT_SERVICE_URL}/internal/menu-items/reduce-stock",
+                json=stock_update_payload
+            )
+            if res_stock.status_code != 200:
+                raise Exception(f"Failed to reduce stock: {res_stock.text}")
+
+            # --- LANGKAH 3: Simpan Order ke DB ---
+            estimasi = datetime.now() + timedelta(minutes=45)
+
             new_order = Order(
-                user_id=user_id, restaurant_id=restaurant_id, address_id=address_id,
-                total_price=total, status=status, payment_id=None
+                user_id=user_id,
+                restaurant_id=restaurant_id,
+                address_id=address_id,
+                total_price=total_amount,
+                status="PENDING_PAYMENT",
+                estimated_delivery_time=estimasi 
             )
             db.add(new_order)
             db.commit()
             db.refresh(new_order)
             
-            for item in items:
-                new_item = OrderItem(
-                    order_id=new_order.id, menu_item_id=item.menu_id,
-                    menu_item_name=item.menu_name, price=item.price, quantity=item.quantity
+            for v_item in validated_items:
+                order_item = OrderItem(
+                    order_id=new_order.id,
+                    menu_item_id=v_item['id'],
+                    menu_item_name=v_item['name'],
+                    quantity=v_item['qty'],
+                    price=v_item['price']
                 )
-                db.add(new_item)
+                db.add(order_item)
             db.commit()
             
-            # Return object sebelum session ditutup
-            result = OrderType(
-                id=new_order.id, 
-                user_id=new_order.user_id, 
+            return OrderType(
+                id=new_order.id,
+                user_id=new_order.user_id,
                 restaurant_id=new_order.restaurant_id,
-                address_id=new_order.address_id,
-                total_price=float(new_order.total_price),
-                status=new_order.status
+                status=new_order.status,
+                total_price=float(new_order.total_price)
             )
-            return result
-            
+        except Exception as e:
+            db.rollback()
+            raise e
         finally:
             db.close()
-
-    @strawberry.mutation(name="updateOrderStatus")
-    def update_order_status(self, id: int, status: str) -> Optional[OrderType]:
-        db = SessionLocal()
-        try:
-            order = db.query(Order).filter(Order.id == id).first()
-            if order:
-                order.status = status
-                db.commit()
-                return OrderType(
-                    id=order.id, user_id=order.user_id, restaurant_id=order.restaurant_id,
-                    address_id=order.address_id, total_price=float(order.total_price),
-                    status=order.status
-                )
-        finally:
-            db.close()
-        return None
 
 schema = strawberry.Schema(query=Query, mutation=Mutation)

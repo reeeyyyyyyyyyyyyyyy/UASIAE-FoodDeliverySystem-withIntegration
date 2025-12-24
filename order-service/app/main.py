@@ -1,17 +1,78 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
 from strawberry.fastapi import GraphQLRouter
+from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import List
 from .database import engine, Base, get_db
-from .models import Order, OrderItem
-from .schema import schema, process_payment_with_doswallet
+from .models import Order
+from .schema import schema
 
-# Buat tabel otomatis
+# Buat tabel
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Order Service")
+
+# --- TAMBAHAN UNTUK INTEGRASI (Internal API) ---
+
+class OrderStatusUpdate(BaseModel):
+    status: str
+
+# 1. Endpoint untuk Payment Service mengecek Order
+@app.get("/internal/orders/{order_id}")
+def get_order_internal(order_id: int, db: Session = Depends(get_db)):
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return {
+        "id": order.id,
+        "status": order.status,
+        "total_price": float(order.total_price),
+        "user_id": order.user_id
+    }
+
+# 2. Endpoint untuk Payment Service meng-update status jadi PAID/PREPARING
+@app.put("/internal/orders/{order_id}/status")
+def update_order_status_internal(order_id: int, update: OrderStatusUpdate, db: Session = Depends(get_db)):
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    order.status = update.status
+    db.commit()
+    return {"message": "Status updated successfully", "new_status": order.status}
+
+# ... (kode sebelumnya) ...
+
+# 3. Endpoint Get Order by Status (Untuk Driver cari order PAID)
+@app.get("/internal/orders/status/{status}")
+def get_orders_by_status_internal(status: str, db: Session = Depends(get_db)):
+    orders = db.query(Order).filter(Order.status == status).all()
+    return [
+        {
+            "id": o.id,
+            "restaurant_id": o.restaurant_id,
+            "address_id": o.address_id,
+            "total_price": float(o.total_price),
+            "status": o.status
+        } for o in orders
+    ]
+
+class AssignDriverRequest(BaseModel):
+    driver_id: int
+
+# 4. Endpoint Assign Driver (Saat Driver Accept Order)
+@app.put("/internal/orders/{order_id}/assign-driver")
+def assign_driver_internal(order_id: int, req: AssignDriverRequest, db: Session = Depends(get_db)):
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    order.driver_id = req.driver_id
+    order.status = "ON_DELIVERY" # Update status jadi sedang diantar
+    db.commit()
+    return {"message": "Driver assigned"}
+
+# -----------------------------------------------
 
 graphql_app = GraphQLRouter(schema)
 app.include_router(graphql_app, prefix="/graphql")
@@ -23,98 +84,3 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.get("/healthz")
-def healthz():
-    return {"status": "ok"}
-
-# --- Pydantic Models (Untuk REST API Input) ---
-class OrderItemRequest(BaseModel):
-    menuId: int
-    name: str
-    price: float
-    quantity: int
-
-class CreateOrderRequest(BaseModel):
-    userId: int
-    restaurantId: int
-    addressId: int
-    items: List[OrderItemRequest]
-
-# --- REST ENDPOINTS (Legacy Frontend Support) ---
-
-@app.post("/orders")
-async def create_order_rest(request: CreateOrderRequest, db: Session = Depends(get_db)):
-    """
-    Endpoint ini dipanggil oleh Frontend React saat checkout.
-    """
-    # 1. Hitung Total
-    total_amount = sum(item.price * item.quantity for item in request.items)
-    
-    # 2. Integrasi Pembayaran (Async Call)
-    payment_result = await process_payment_with_doswallet(request.userId, total_amount)
-    
-    status = "PAID" if payment_result.get("success") else "CANCELLED"
-
-    # 3. Simpan Order
-    new_order = Order(
-        user_id=request.userId, 
-        restaurant_id=request.restaurantId,
-        address_id=request.addressId,
-        total_price=total_amount, 
-        status=status
-    )
-    db.add(new_order)
-    db.commit()
-    db.refresh(new_order)
-    
-    # 4. Simpan Items
-    for item in request.items:
-        new_item = OrderItem(
-            order_id=new_order.id, 
-            menu_item_id=item.menuId, 
-            menu_item_name=item.name, 
-            price=item.price, 
-            quantity=item.quantity
-        )
-        db.add(new_item)
-    db.commit()
-
-    # 5. Return JSON format Frontend
-    return {
-        "id": new_order.id,
-        "userId": new_order.user_id,
-        "restaurantId": new_order.restaurant_id,
-        "addressId": new_order.address_id,
-        "totalPrice": float(new_order.total_price),
-        "status": new_order.status
-    }
-
-@app.get("/orders")
-def get_my_orders(user_id: int, db: Session = Depends(get_db)):
-    orders = db.query(Order).filter(Order.user_id == user_id).order_by(Order.created_at.desc()).all()
-    
-    result = []
-    for o in orders:
-        items = db.query(OrderItem).filter(OrderItem.order_id == o.id).all()
-        result.append({
-            "id": o.id,
-            "restaurantId": o.restaurant_id,
-            "addressId": o.address_id,
-            "totalPrice": float(o.total_price),
-            "status": o.status,
-            "createdAt": str(o.created_at),
-            "items": [
-                {
-                    "menuId": i.menu_item_id,
-                    "name": i.menu_item_name,
-                    "price": float(i.price),
-                    "quantity": i.quantity
-                } for i in items
-            ]
-        })
-    return result
-
-@app.get("/")
-def root():
-    return {"message": "Order Service is running"}

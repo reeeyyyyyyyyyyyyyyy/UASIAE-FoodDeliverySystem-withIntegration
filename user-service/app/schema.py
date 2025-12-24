@@ -9,35 +9,29 @@ import os
 from datetime import datetime, timedelta
 
 # --- SETUP AUTH ---
-# Prefer bcrypt_sha256 to avoid the 72-byte bcrypt limit and backend incompatibilities;
-# keep plain bcrypt as fallback to verify existing hashes from DB.
-# Use PBKDF2-SHA256 as default hasher (no 72-byte limit) and keep bcrypt as fallback
-pwd_context = CryptContext(schemes=["pbkdf2_sha256", "bcrypt"], deprecated="auto")
-SECRET_KEY = os.getenv("SECRET_KEY", "secret")
+# deprecated="auto" akan otomatis menangani hash lama dan mengupdatenya jika perlu
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+SECRET_KEY = os.getenv("SECRET_KEY", "rahasia_super_aman")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 
-def verify_password(plain_password, hashed_password):
-    """Verify plain password against bcrypt hash"""
+def get_password_hash(password: str):
+    return pwd_context.hash(password)
+
+def verify_password(plain_password: str, hashed_password):
+    # HANDLING KHUSUS: MySQL Connector kadang mengembalikan hash sebagai bytes
+    # Kita paksa ubah jadi string utf-8 agar passlib bisa membacanya
+    if isinstance(hashed_password, bytes):
+        hashed_password = hashed_password.decode("utf-8")
+    
+    # Jika hashed_password masih bukan string (misal None), return False
+    if not isinstance(hashed_password, str):
+        return False
+        
     try:
-        if isinstance(hashed_password, bytes):
-            hashed_password = hashed_password.decode('utf-8')
-        # Truncate to 72 bytes BEFORE verification (bcrypt limit)
-        if len(plain_password) > 72:
-            plain_password = plain_password[:72]
         return pwd_context.verify(plain_password, hashed_password)
     except Exception as e:
-        print(f"Password verify error: {e}")
+        print(f"Auth Verify Error: {e}")
         return False
-
-def get_password_hash(password: str) -> str:
-    """Hash password with bcrypt, truncating to 72 bytes if necessary"""
-    try:
-        # Truncate to 72 bytes BEFORE hashing (bcrypt limit)
-        if len(password) > 72:
-            password = password[:72]
-        return pwd_context.hash(password)
-    except Exception as e:
-        raise Exception(f"Password hashing error: {e}")
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -65,18 +59,16 @@ class UserType:
     @strawberry.field
     def addresses(self) -> List[AddressType]:
         db = SessionLocal()
-        try:
-            addrs = db.query(Address).filter(Address.user_id == self.id).all()
-            return [
-                AddressType(id=a.id, label=a.label, full_address=a.full_address, is_default=bool(a.is_default)) 
-                for a in addrs
-            ]
-        finally:
-            db.close()
-
-    @strawberry.field(name="fullName")
-    def full_name(self) -> str:
-        return self.name
+        addrs = db.query(Address).filter(Address.user_id == self.id).all()
+        db.close()
+        return [
+            AddressType(
+                id=a.id, 
+                label=a.label, 
+                full_address=a.full_address, 
+                is_default=bool(a.is_default)
+            ) for a in addrs
+        ]
 
 @strawberry.type
 class AuthPayload:
@@ -93,28 +85,27 @@ class Query:
             payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
             email = payload.get("sub")
             db = SessionLocal()
-            try:
-                user = db.query(User).filter(User.email == email).first()
-                if user:
-                    return UserType(id=user.id, name=user.name, email=user.email, role=user.role, phone=user.phone)
-            finally:
-                db.close()
-        except:
-            pass
-        return None
-    
-    @strawberry.field(name="userById") 
-    def user_by_id(self, id: int) -> Optional[UserType]:
-        db = SessionLocal()
-        try:
-            user = db.query(User).filter(User.id == id).first()
+            user = db.query(User).filter(User.email == email).first()
+            db.close()
             if user:
                 return UserType(
                     id=user.id, name=user.name, email=user.email, 
                     role=user.role, phone=user.phone
                 )
-        finally:
-            db.close()
+        except Exception as e:
+            pass
+        return None
+
+    @strawberry.field
+    def user_by_id(self, id: int) -> Optional[UserType]:
+        db = SessionLocal()
+        user = db.query(User).filter(User.id == id).first()
+        db.close()
+        if user:
+            return UserType(
+                id=user.id, name=user.name, email=user.email, 
+                role=user.role, phone=user.phone
+            )
         return None
 
 @strawberry.type
@@ -122,73 +113,53 @@ class Mutation:
     @strawberry.mutation
     def login(self, email: str, password: str) -> AuthPayload:
         db = SessionLocal()
-        try:
-            user = db.query(User).filter(User.email == email).first()
+        user = db.query(User).filter(User.email == email).first()
+        db.close()
+        
+        if not user:
+            raise Exception("User not found")
+        
+        # Passlib akan menangani verifikasi
+        if not verify_password(password, user.password):
+            raise Exception("Invalid credentials")
             
-            if not user:
-                raise Exception("User not found")
-
-            # Verify password dengan truncation otomatis
-            try:
-                ok = verify_password(password, user.password)
-            except Exception:
-                ok = False
-
-            # Fallback for seeded users: some initial DB rows use a known bcrypt hash for "password".
-            # If verification failed but the stored hash matches the known seed, accept and rotate to PBKDF2.
-            KNOWN_SEED_HASH = "$2a$10$lV/JwJm0pcWa7R.WP3PVqeCrTfqMb6fTm0TVEbqLunxUU.fUvxX1m"
-            if not ok and user.password == KNOWN_SEED_HASH and password == "password":
-                # rotate hash to the current default hasher
-                new_hash = get_password_hash(password)
-                user.password = new_hash
-                db.add(user)
-                db.commit()
-                ok = True
-
-            if not ok:
-                raise Exception("Invalid password")
-                
-            token = create_access_token({"sub": user.email, "role": user.role})
-            return AuthPayload(
-                token=token,
-                user=UserType(id=user.id, name=user.name, email=user.email, role=user.role, phone=user.phone)
+        token = create_access_token({"sub": user.email, "role": user.role, "id": user.id})
+        
+        return AuthPayload(
+            token=token,
+            user=UserType(
+                id=user.id, name=user.name, email=user.email, 
+                role=user.role, phone=user.phone
             )
-        except Exception as e:
-            raise Exception(f"Login error: {str(e)}")
-        finally:
-            db.close()
+        )
     
     @strawberry.mutation
     def register(self, name: str, email: str, password: str, phone: str, role: str = "CUSTOMER") -> AuthPayload:
         db = SessionLocal()
-        try:
-            # Check email duplicate
-            if db.query(User).filter(User.email == email).first():
-                raise Exception("Email already registered")
-            
-            # Hash password dengan truncation otomatis
-            try:
-                hashed_pw = get_password_hash(password)
-            except ValueError as ve:
-                raise Exception(str(ve))
-            
-            # Create user baru
-            new_user = User(name=name, email=email, password=hashed_pw, phone=phone, role=role)
-            db.add(new_user)
-            db.commit()
-            db.refresh(new_user)
-            
-            # Create token
-            token = create_access_token({"sub": new_user.email, "role": new_user.role})
-            
-            return AuthPayload(
-                token=token,
-                user=UserType(id=new_user.id, name=new_user.name, email=new_user.email, role=new_user.role, phone=new_user.phone)
-            )
-        except Exception as e:
-            db.rollback()
-            raise Exception(f"Register error: {str(e)}")
-        finally:
+        if db.query(User).filter(User.email == email).first():
             db.close()
+            raise Exception("Email already registered")
+        
+        hashed_pw = get_password_hash(password)
+        
+        new_user = User(
+            name=name, email=email, password=hashed_pw, 
+            phone=phone, role=role
+        )
+        
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        
+        token = create_access_token({"sub": new_user.email, "role": new_user.role, "id": new_user.id})
+        db.close()
+        
+        return AuthPayload(
+            token=token,
+            user=UserType(
+                id=new_user.id, name=new_user.name, email=new_user.email, 
+                role=new_user.role, phone=new_user.phone
+            )
+        )
 
 schema = strawberry.Schema(query=Query, mutation=Mutation)

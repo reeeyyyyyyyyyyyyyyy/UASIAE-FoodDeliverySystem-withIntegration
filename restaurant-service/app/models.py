@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, Text, DateTime, DECIMAL
+from sqlalchemy import Column, Integer, String, Float, Boolean, ForeignKey, Text, DECIMAL, DateTime
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
@@ -8,10 +8,12 @@ class Restaurant(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
-    cuisine_type = Column(String(100), nullable=False)  # Sesuai SQL
-    address = Column(Text, nullable=False)  # Sesuai SQL
-    is_open = Column(Boolean, default=True)  # Sesuai SQL
-    image_url = Column(String(500), nullable=True)
+    cuisine_type = Column(String(100), nullable=False) # DB: cuisine_type
+    address = Column(Text, nullable=False)
+    is_open = Column(Boolean, default=True)
+    image_url = Column(String(500), nullable=True) # DB: image_url
+    
+    # RATING SUDAH DIHAPUS TOTAL
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())
@@ -26,9 +28,9 @@ class MenuItem(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     price = Column(DECIMAL(10, 2), nullable=False)
-    stock = Column(Integer, default=0)  # Sesuai SQL
+    stock = Column(Integer, default=0) 
     is_available = Column(Boolean, default=True)
-    category = Column(String(50), nullable=True)
+    category = Column(String(50), default="Makanan")
     image_url = Column(String(500), nullable=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())

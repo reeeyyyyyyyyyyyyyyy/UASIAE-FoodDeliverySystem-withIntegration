@@ -1,200 +1,161 @@
 import strawberry
 from typing import List, Optional
+from strawberry.types import Info
+from sqlalchemy.orm import Session
 from .database import SessionLocal
 from .models import Restaurant, MenuItem
+from jose import jwt, JWTError
+import os
+
+# --- KONFIGURASI AUTH ---
+SECRET_KEY = os.getenv("SECRET_KEY", "kunci_rahasia_project_ini_harus_sama_semua")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+
+def get_current_user(info: Info):
+    """
+    Validasi Token dan return data user (id & role)
+    """
+    request = info.context.get("request")
+    if not request:
+        raise Exception("Request context not found")
+
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        raise Exception("Authorization header missing")
+
+    try:
+        scheme, token = auth_header.split()
+        if scheme.lower() != "bearer":
+            raise Exception("Invalid authentication scheme")
+        
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload # Berisi {'id': ..., 'role': ..., 'sub': ...}
+        
+    except (ValueError, JWTError):
+        raise Exception("Invalid or expired token")
+
+# --- TYPES (Sama seperti sebelumnya) ---
 
 @strawberry.type
-class MenuType:
+class MenuItemType:
     id: int
     name: str
     description: Optional[str]
     price: float
-    image_url: Optional[str]
-    is_available: bool
-    category: Optional[str]
     stock: int
+    category: Optional[str]
+    imageUrl: Optional[str]
+    isAvailable: bool
 
 @strawberry.type
 class RestaurantType:
     id: int
     name: str
     address: str
-    cuisine_type: str
-    is_open: bool
-    image_url: Optional[str]
-    
+    isOpen: bool
+    category: Optional[str] 
+    imageUrl: Optional[str]
+
     @strawberry.field
-    def menus(self) -> List[MenuType]:
+    def menus(self) -> List[MenuItemType]:
         db = SessionLocal()
-        try:
-            menus = db.query(MenuItem).filter(MenuItem.restaurant_id == self.id).all()
-            return [
-                MenuType(
-                    id=m.id, name=m.name, description=m.description, 
-                    price=float(m.price), image_url=m.image_url, is_available=bool(m.is_available),
-                    category=m.category, stock=m.stock
-                ) for m in menus
-            ]
-        finally:
-            db.close()
+        menus = db.query(MenuItem).filter(MenuItem.restaurant_id == self.id).all()
+        db.close()
+        return [
+            MenuItemType(
+                id=m.id, 
+                name=m.name, 
+                description=m.description, 
+                price=float(m.price),
+                stock=m.stock,
+                category=m.category,
+                imageUrl=m.image_url, 
+                isAvailable=bool(m.is_available)
+            ) for m in menus
+        ]
+
+# --- RESOLVERS ---
 
 @strawberry.type
 class Query:
+    # PUBLIC: Tidak perlu cek token/role
     @strawberry.field
     def restaurants(self) -> List[RestaurantType]:
         db = SessionLocal()
-        try:
-            restaurants = db.query(Restaurant).all()
-            return [
-                RestaurantType(
-                    id=r.id, name=r.name, address=r.address, 
-                    cuisine_type=r.cuisine_type, is_open=bool(r.is_open), image_url=r.image_url
-                ) for r in restaurants
-            ]
-        finally:
-            db.close()
+        restaurants_db = db.query(Restaurant).all()
+        db.close()
+        return [
+            RestaurantType(
+                id=r.id, 
+                name=r.name, 
+                address=r.address, 
+                isOpen=bool(r.is_open),
+                category=r.cuisine_type, 
+                imageUrl=r.image_url
+            ) for r in restaurants_db
+        ]
 
-    @strawberry.field(name="restaurantById")
-    def restaurant_by_id(self, id: int) -> Optional[RestaurantType]:
-        db = SessionLocal()
-        try:
-            r = db.query(Restaurant).filter(Restaurant.id == id).first()
-            if r:
-                return RestaurantType(
-                    id=r.id, name=r.name, address=r.address, 
-                    cuisine_type=r.cuisine_type, is_open=bool(r.is_open), image_url=r.image_url
-                )
-        finally:
-            db.close()
-        return None
-
+    # PUBLIC: Tidak perlu cek token/role
     @strawberry.field
     def restaurant(self, id: int) -> Optional[RestaurantType]:
         db = SessionLocal()
-        try:
-            r = db.query(Restaurant).filter(Restaurant.id == id).first()
-            if r:
-                return RestaurantType(
-                    id=r.id, name=r.name, address=r.address, 
-                    cuisine_type=r.cuisine_type, is_open=bool(r.is_open), image_url=r.image_url
-                )
-        finally:
-            db.close()
+        r = db.query(Restaurant).filter(Restaurant.id == id).first()
+        db.close()
+        if r:
+            return RestaurantType(
+                id=r.id, 
+                name=r.name, 
+                address=r.address, 
+                isOpen=bool(r.is_open),
+                category=r.cuisine_type,
+                imageUrl=r.image_url
+            )
         return None
 
-    @strawberry.field(name="allMenuItems")
-    def all_menu_items(self) -> List[MenuType]:
-        db = SessionLocal()
-        try:
-            items = db.query(MenuItem).all()
-            return [
-                MenuType(
-                    id=m.id, name=m.name, description=m.description,
-                    price=float(m.price), image_url=m.image_url, is_available=bool(m.is_available),
-                    category=m.category, stock=m.stock
-                ) for m in items
-            ]
-        finally:
-            db.close()
-
-    @strawberry.field
-    def menu_items(self, restaurant_id: Optional[int] = None) -> List[MenuType]:
-        db = SessionLocal()
-        try:
-            query = db.query(MenuItem)
-            if restaurant_id:
-                query = query.filter(MenuItem.restaurant_id == restaurant_id)
-            items = query.all()
-            return [
-                MenuType(
-                    id=m.id, name=m.name, description=m.description,
-                    price=float(m.price), image_url=m.image_url, is_available=bool(m.is_available),
-                    category=m.category, stock=m.stock
-                ) for m in items
-            ]
-        finally:
-            db.close()
+# --- MUTATIONS (PROTECTED ADMIN) ---
 
 @strawberry.type
 class Mutation:
-    @strawberry.mutation(name="createRestaurant")
-    def create_restaurant(self, name: str, address: str, phone: str, description: Optional[str] = None) -> Optional[RestaurantType]:
+    @strawberry.mutation
+    def add_restaurant(
+        self, 
+        info: Info, # Butuh info untuk baca header
+        name: str, 
+        address: str, 
+        category: str, 
+        image_url: str = None
+    ) -> RestaurantType:
+        
+        # 1. CEK AUTH & ROLE
+        user = get_current_user(info)
+        
+        # Pastikan role di token adalah ADMIN (Case insensitive)
+        if user.get("role", "").upper() != "ADMIN":
+            raise Exception("Unauthorized: Only Admins can add restaurants")
+
+        # 2. PROSES TAMBAH DATA
         db = SessionLocal()
         try:
-            restaurant = Restaurant(
-                name=name,
-                address=address,
-                phone=phone,
-                description=description
+            new_resto = Restaurant(
+                name=name, 
+                address=address, 
+                cuisine_type=category, 
+                is_open=True, 
+                image_url=image_url
             )
-            db.add(restaurant)
+            db.add(new_resto)
             db.commit()
-            db.refresh(restaurant)
+            db.refresh(new_resto)
+            
             return RestaurantType(
-                id=restaurant.id, name=restaurant.name, address=restaurant.address,
-                phone=restaurant.phone, description=restaurant.description
+                id=new_resto.id, 
+                name=new_resto.name, 
+                address=new_resto.address, 
+                isOpen=new_resto.is_open,
+                category=new_resto.cuisine_type,
+                imageUrl=new_resto.image_url
             )
         finally:
             db.close()
-        return None
-
-    @strawberry.mutation(name="createMenuItem")
-    def create_menu_item(self, restaurant_id: int, name: str, description: Optional[str], price: float, category: str, stock: int = 0) -> Optional[MenuType]:
-        db = SessionLocal()
-        try:
-            menu_item = MenuItem(
-                restaurant_id=restaurant_id,
-                name=name,
-                description=description,
-                price=price,
-                category=category,
-                stock=stock,
-                is_available=True
-            )
-            db.add(menu_item)
-            db.commit()
-            db.refresh(menu_item)
-            return MenuType(
-                id=menu_item.id, name=menu_item.name, description=menu_item.description,
-                price=float(menu_item.price), image_url=menu_item.image_url, is_available=bool(menu_item.is_available),
-                category=menu_item.category, stock=menu_item.stock
-            )
-        finally:
-            db.close()
-        return None
-
-    @strawberry.mutation
-    def update_menu_availability(self, menu_id: int, is_available: bool) -> Optional[MenuType]:
-        db = SessionLocal()
-        try:
-            menu = db.query(MenuItem).filter(MenuItem.id == menu_id).first()
-            if menu:
-                menu.is_available = is_available
-                db.commit()
-                return MenuType(
-                    id=menu.id, name=menu.name, description=menu.description,
-                    price=float(menu.price), image_url=menu.image_url, is_available=bool(menu.is_available),
-                    category=menu.category, stock=menu.stock
-                )
-        finally:
-            db.close()
-        return None
-
-    @strawberry.mutation
-    def update_menu_stock(self, menu_id: int, stock: int) -> Optional[MenuType]:
-        db = SessionLocal()
-        try:
-            menu = db.query(MenuItem).filter(MenuItem.id == menu_id).first()
-            if menu:
-                menu.stock = stock
-                db.commit()
-                return MenuType(
-                    id=menu.id, name=menu.name, description=menu.description,
-                    price=float(menu.price), image_url=menu.image_url, is_available=bool(menu.is_available),
-                    category=menu.category, stock=menu.stock
-                )
-        finally:
-            db.close()
-        return None
 
 schema = strawberry.Schema(query=Query, mutation=Mutation)
