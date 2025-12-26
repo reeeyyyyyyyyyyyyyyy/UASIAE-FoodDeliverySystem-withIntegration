@@ -1,8 +1,10 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Header
 from fastapi.middleware.cors import CORSMiddleware
 from strawberry.fastapi import GraphQLRouter
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from jose import jwt, JWTError # Tambahkan Import ini
+import os # Tambahkan Import ini
 from . import models, database, schema
 
 # --- Init Database ---
@@ -19,7 +21,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- REST API MODELS (Untuk Frontend Lama) ---
+# --- KONFIGURASI AUTH (SAMA DENGAN SERVICE LAIN) ---
+SECRET_KEY = os.getenv("SECRET_KEY", "kunci_rahasia_project_ini_harus_sama_semua")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+
+# --- REST API MODELS ---
 class LoginRequest(BaseModel):
     email: str
     password: str
@@ -31,7 +37,7 @@ class RegisterRequest(BaseModel):
     role: str = "CUSTOMER"
     phone: str = None
 
-# --- REST ENDPOINTS (Legacy Support) ---
+# --- REST ENDPOINTS ---
 
 @app.post("/auth/login")
 def login_rest(req: LoginRequest, db: Session = Depends(database.get_db)):
@@ -39,7 +45,8 @@ def login_rest(req: LoginRequest, db: Session = Depends(database.get_db)):
     if not user or not schema.verify_password(req.password, user.password):
         raise HTTPException(status_code=400, detail="Invalid credentials")
     
-    token = schema.create_access_token({"sub": str(user.id), "role": user.role})
+    # Simpan User ID di 'sub' (subject) token
+    token = schema.create_access_token({"sub": str(user.id), "role": user.role, "id": user.id})
     
     return {
         "token": token,
@@ -69,7 +76,7 @@ def register_rest(req: RegisterRequest, db: Session = Depends(database.get_db)):
     db.commit()
     db.refresh(new_user)
     
-    token = schema.create_access_token({"sub": str(new_user.id), "role": new_user.role})
+    token = schema.create_access_token({"sub": str(new_user.id), "role": new_user.role, "id": new_user.id})
     
     return {
         "token": token,
@@ -81,11 +88,34 @@ def register_rest(req: RegisterRequest, db: Session = Depends(database.get_db)):
         }
     }
 
-@app.get("/users/me")
-def get_me(token: str = None):
-    return {"message": "User profile"}
-
-# --- GRAPHQL ENDPOINT (New Requirement) ---
+# --- UPDATE PENTING: GET REAL PROFILE FROM DB ---
+@app.get("/users/profile/me")
+def get_me(authorization: str = Header(None), db: Session = Depends(database.get_db)):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing Token")
+    
+    try:
+        # Decode Token
+        token = authorization.split(" ")[1]
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        
+        # Ambil Data dari DB
+        user = db.query(models.User).filter(models.User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+            
+        return {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "role": user.role,
+            "phone": user.phone
+        }
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid Token")
+    
+# --- GRAPHQL ENDPOINT ---
 graphql_app = GraphQLRouter(schema.schema)
 app.include_router(graphql_app, prefix="/graphql")
 

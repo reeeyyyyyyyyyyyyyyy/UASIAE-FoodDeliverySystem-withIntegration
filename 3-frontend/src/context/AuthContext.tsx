@@ -37,181 +37,113 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [token, setToken] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check if user is already logged in from localStorage
     const storedToken = localStorage.getItem('token');
     
     if (storedToken) {
       try {
-        // Decode token to get user info
         const decoded = jwtDecode<JWTPayload>(storedToken);
         
-        // Check if token is expired
         if (decoded.exp && decoded.exp * 1000 < Date.now()) {
-          // Token expired, remove it
           localStorage.removeItem('token');
           localStorage.removeItem('user');
           return;
         }
         
-        // Set token
         setToken(storedToken);
         
-        // Try to get user from localStorage first
         const storedUser = localStorage.getItem('user');
         if (storedUser) {
           try {
-            const userData = JSON.parse(storedUser);
-            setUser(userData);
-          } catch (error) {
-            console.error('Failed to parse user data:', error);
-            // If parsing fails, create minimal user from token
-            const minimalUser: User = {
-              id: decoded.id,
-              email: decoded.email,
-              name: decoded.email.split('@')[0],
-              role: decoded.role,
-            };
-            setUser(minimalUser);
-            localStorage.setItem('user', JSON.stringify(minimalUser));
+            setUser(JSON.parse(storedUser));
+          } catch {
+            // Fallback jika json parse error
+            setUser({ id: decoded.id, email: decoded.email, name: 'User', role: decoded.role });
           }
-        } else {
-          // If no user in localStorage, create minimal user from token
-          const minimalUser: User = {
-            id: decoded.id,
-            email: decoded.email,
-            name: decoded.email.split('@')[0],
-            role: decoded.role,
-          };
-          setUser(minimalUser);
-          localStorage.setItem('user', JSON.stringify(minimalUser));
         }
         
-        // Fetch full user profile in background
-        userAPI.getProfile()
-          .then((response) => {
-            if (response.status === 'success' && response.data) {
-              setUser(response.data);
-              localStorage.setItem('user', JSON.stringify(response.data));
+        // Refresh profile di background
+        userAPI.getProfile().then((data: any) => {
+            // Support kedua format response (jaga-jaga)
+            const userData = data.data || data; 
+            if (userData && userData.id) {
+              setUser(userData);
+              localStorage.setItem('user', JSON.stringify(userData));
             }
-          })
-          .catch((error) => {
-            console.warn('Failed to fetch user profile on mount:', error);
-            // Keep using minimal user from token
-          });
+          }).catch(() => {});
       } catch (error) {
-        console.error('Failed to decode token:', error);
         localStorage.removeItem('token');
-        localStorage.removeItem('user');
       }
     }
   }, []);
 
   const login = async (email: string, password: string) => {
     try {
-      console.log('🔐 Attempting login for:', email);
-      
-          // Add timeout to login API call
-          const loginPromise = authAPI.login({ email, password });
-          const loginTimeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Login request timeout. Please check your connection.')), 3000)
-          );
-      
-      const response = await Promise.race([loginPromise, loginTimeoutPromise]) as any;
+      // Panggil API
+      const response = await authAPI.login({ email, password }) as any;
       console.log('✅ Login response:', response);
       
-      if (response.status === 'success' && response.data?.token) {
-        const token = response.data.token;
-        console.log('🔑 Token received, length:', token.length);
-        
-        // Decode token to get user info immediately
+      // --- PERBAIKAN LOGIKA DISINI ---
+      // Backend mengirim { token: "...", user: {...} }
+      // Jadi kita cek langsung properti 'token'
+      if (response && response.token) {
+        const token = response.token;
         const decoded = jwtDecode<JWTPayload>(token);
         
-        // Set token and save to localStorage
         setToken(token);
         localStorage.setItem('token', token);
 
-        // Create minimal user from token immediately
-        const minimalUser: User = {
-          id: decoded.id,
-          email: decoded.email,
-          name: decoded.email.split('@')[0],
-          role: decoded.role,
-        };
-        setUser(minimalUser);
-        localStorage.setItem('user', JSON.stringify(minimalUser));
-
-        // Fetch full user profile in background
-        try {
-          await new Promise(resolve => setTimeout(resolve, 500));
-          
-          console.log('📋 Fetching user profile...');
-          
-          const profilePromise = userAPI.getProfile();
-          const profileTimeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Profile fetch timeout')), 5000)
-          );
-          
-          const profileResponse = await Promise.race([profilePromise, profileTimeoutPromise]) as any;
-          console.log('✅ Profile response:', profileResponse);
-          
-          if (profileResponse.status === 'success' && profileResponse.data) {
-            const userData = profileResponse.data;
-            setUser(userData);
-            localStorage.setItem('user', JSON.stringify(userData));
-            console.log('✅ User logged in successfully:', userData);
-            // Return role for redirect
-            return { role: userData.role || decoded.role };
-          }
-        } catch (error: any) {
-          console.warn('⚠️ Profile fetch failed, using minimal user data from token:', error.message);
-          // Login still succeeds with minimal data from token
+        // Ambil data user dari response login jika ada
+        let userData: User;
+        if (response.user) {
+            userData = response.user;
+        } else {
+            userData = {
+                id: decoded.id,
+                email: decoded.email,
+                name: decoded.email.split('@')[0],
+                role: decoded.role,
+            };
         }
         
-        // Return role from token for redirect
+        setUser(userData);
+        localStorage.setItem('user', JSON.stringify(userData));
+
         return { role: decoded.role };
       } else {
-        console.error('❌ Login failed - no token in response');
-        throw new Error(response.message || 'Login failed - no token received');
+        throw new Error('Login failed: Invalid server response (No Token)');
       }
     } catch (error: any) {
       console.error('❌ Login error:', error);
-      const errorMessage = error.response?.data?.message || error.message || 'Login failed';
-      throw new Error(errorMessage);
+      // Ambil pesan error dari backend FastAPI (biasanya di error.response.data.detail)
+      const msg = error.response?.data?.detail || error.message || 'Login failed';
+      throw new Error(msg);
     }
   };
 
   const register = async (name: string, email: string, password: string, phone?: string) => {
     try {
-      console.log('📝 Attempting registration for:', email);
+      const response = await authAPI.register({ name, email, password, phone }) as any;
+      console.log('✅ Register response:', response);
       
-      // Add timeout to register API call
-      const registerPromise = authAPI.register({ name, email, password, phone });
-      const registerTimeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Registration request timeout. Please check your connection.')), 10000)
-      );
-      
-      const response = await Promise.race([registerPromise, registerTimeoutPromise]) as any;
-      console.log('✅ Registration response:', response);
-      
-      if (response.status === 'success') {
-        // Auto login after registration
-        console.log('🔄 Auto-login after registration...');
-        try {
-          const loginResult = await login(email, password);
-          return loginResult; // Return role for redirect
-        } catch (loginError: any) {
-          // If auto-login fails, registration still succeeded
-          console.warn('⚠️ Auto-login failed after registration:', loginError.message);
-          // Return default customer role since new registration is always customer
-          return { role: 'CUSTOMER' };
+      // Sama seperti login, cek token langsung
+      if (response && response.token) {
+        const token = response.token;
+        setToken(token);
+        localStorage.setItem('token', token);
+        
+        if (response.user) {
+            setUser(response.user);
+            localStorage.setItem('user', JSON.stringify(response.user));
         }
+        
+        const decoded = jwtDecode<JWTPayload>(token);
+        return { role: decoded.role || 'CUSTOMER' };
       } else {
-        throw new Error(response.message || 'Registration failed');
+        throw new Error('Registration failed: No token returned');
       }
     } catch (error: any) {
-      console.error('❌ Registration error:', error);
-      const errorMessage = error.response?.data?.message || error.message || 'Registration failed';
-      throw new Error(errorMessage);
+      const msg = error.response?.data?.detail || error.message || 'Registration failed';
+      throw new Error(msg);
     }
   };
 
@@ -222,12 +154,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     localStorage.removeItem('user');
   };
 
-  // Normalize role to uppercase for comparison
   const userRole = user?.role?.toUpperCase();
-  const isAdmin = userRole === 'ADMIN';
-  const isDriver = userRole === 'DRIVER';
-  const isCustomer = userRole === 'CUSTOMER' || (!isAdmin && !isDriver);
-
+  
   return (
     <AuthContext.Provider
       value={{
@@ -236,10 +164,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         login,
         register,
         logout,
-        isAuthenticated: !!token && !!user,
-        isAdmin,
-        isDriver,
-        isCustomer,
+        isAuthenticated: !!token,
+        isAdmin: userRole === 'ADMIN',
+        isDriver: userRole === 'DRIVER',
+        isCustomer: userRole === 'CUSTOMER' || (!userRole && !!token),
       }}
     >
       {children}
@@ -254,4 +182,3 @@ export const useAuth = () => {
   }
   return context;
 };
-

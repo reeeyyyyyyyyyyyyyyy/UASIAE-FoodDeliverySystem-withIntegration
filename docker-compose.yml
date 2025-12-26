@@ -1,161 +1,92 @@
 version: '3.8'
 
 services:
-  api-gateway:
-    build: ./api-gateway
-    container_name: api-gateway
-    ports:
-      - "4000:4000"
+  # --- DATABASES ---
+  user_db:
+    image: mysql:8.0
     environment:
-      - PORT=4000
-      - USER_SERVICE_URL=http://user-service:8000
-      - RESTAURANT_SERVICE_URL=http://restaurant-service:8000
-      - ORDER_SERVICE_URL=http://order-service:8000
-      - PAYMENT_SERVICE_URL=http://payment-service:8000
-      - DRIVER_SERVICE_URL=http://driver-service:8000
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=user_service_db
     networks:
-      - iae-network
-    depends_on:
-      - user-service
-      - restaurant-service
-      - order-service
-      - payment-service
-      - driver-service
-    restart: unless-stopped
+      - app-network
 
+  restaurant_db:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=restaurant_service_db
+    networks:
+      - app-network
+
+  order_db:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=order_service_db
+    networks:
+      - app-network
+
+  payment_db:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=payment_service_db
+    networks:
+      - app-network
+
+  driver_db:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+      - MYSQL_DATABASE=driver_service_db
+    networks:
+      - app-network
+
+  # --- BACKEND SERVICES ---
   user-service:
     build: ./user-service
-    container_name: user-service
-    ports:
-      - "4001:8000"
     environment:
       - DATABASE_URL=mysql+pymysql://root:root@user_db:3306/user_service_db
-      # TAMBAHKAN INI (Pastikan sama persis di semua service)
       - SECRET_KEY=kunci_rahasia_project_ini_harus_sama_semua
       - ALGORITHM=HS256
     depends_on:
       - user_db
     networks:
-      - iae-network
-    restart: unless-stopped
-
-  user_db:
-    image: mysql:8.0
-    container_name: user_db
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: user_service_db
-      MYSQL_INITDB_SKIP_TZINFO: 1
-    ports:
-      - "3307:3306"
-    volumes:
-      - ./user_service_db.sql:/docker-entrypoint-initdb.d/init.sql
-      - user_db_data:/var/lib/mysql
-    networks:
-      - iae-network
-    restart: unless-stopped
-    command: --max_connections=1000 --max_allowed_packet=256M
+      - app-network
 
   restaurant-service:
     build: ./restaurant-service
-    container_name: restaurant-service
-    ports:
-      - "4002:8000"
     environment:
       - DATABASE_URL=mysql+pymysql://root:root@restaurant_db:3306/restaurant_service_db
     depends_on:
       - restaurant_db
     networks:
-      - iae-network
-    restart: unless-stopped
-
-  restaurant_db:
-    image: mysql:8.0
-    container_name: restaurant_db
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: restaurant_service_db
-      MYSQL_INITDB_SKIP_TZINFO: 1
-    ports:
-      - "3312:3306"
-    volumes:
-      - ./restaurant_service_db.sql:/docker-entrypoint-initdb.d/init.sql
-      - restaurant_db_data:/var/lib/mysql
-    networks:
-      - iae-network
-    restart: unless-stopped
-    command: --max_connections=1000 --max_allowed_packet=256M
+      - app-network
 
   order-service:
     build: ./order-service
-    container_name: order-service
-    ports:
-      - "4003:8000"
     environment:
       - DATABASE_URL=mysql+pymysql://root:root@order_db:3306/order_service_db
-      # TAMBAHKAN INI (Harus SAMA PERSIS dengan User Service)
       - SECRET_KEY=kunci_rahasia_project_ini_harus_sama_semua
       - ALGORITHM=HS256
     depends_on:
       - order_db
     networks:
-      - iae-network
-    restart: unless-stopped
-
-  order_db:
-    image: mysql:8.0
-    container_name: order_db
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: order_service_db
-      MYSQL_INITDB_SKIP_TZINFO: 1
-    ports:
-      - "3309:3306"
-    volumes:
-      - ./order_service_db.sql:/docker-entrypoint-initdb.d/init.sql
-      - order_db_data:/var/lib/mysql
-    networks:
-      - iae-network
-    restart: unless-stopped
-    command: --max_connections=1000 --max_allowed_packet=256M
+      - app-network
 
   payment-service:
     build: ./payment-service
-    container_name: payment-service
-    ports:
-      - "4004:8000"
     environment:
       - DATABASE_URL=mysql+pymysql://root:root@payment_db:3306/payment_service_db
+      - SECRET_KEY=kunci_rahasia_project_ini_harus_sama_semua
+      - ALGORITHM=HS256
     depends_on:
       - payment_db
     networks:
-      - iae-network
-    restart: unless-stopped
-
-  payment_db:
-    image: mysql:8.0
-    container_name: payment_db
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: payment_service_db
-      MYSQL_INITDB_SKIP_TZINFO: 1
-    ports:
-      - "3310:3306"
-    volumes:
-      - ./payment_service_db.sql:/docker-entrypoint-initdb.d/init.sql
-      - payment_db_data:/var/lib/mysql
-    networks:
-      - iae-network
-    restart: unless-stopped
-    command: --max_connections=1000 --max_allowed_packet=256M
+      - app-network
 
   driver-service:
     build: ./driver-service
-    container_name: driver-service
-    ports:
-      - "4005:8000"
-    volumes:
-      - ./driver-service:/app
     environment:
       - DATABASE_URL=mysql+pymysql://root:root@driver_db:3306/driver_service_db
       - SECRET_KEY=kunci_rahasia_project_ini_harus_sama_semua
@@ -163,33 +94,32 @@ services:
     depends_on:
       - driver_db
     networks:
-      - iae-network
-    restart: unless-stopped
+      - app-network
 
-  driver_db:
-    image: mysql:8.0
-    container_name: driver_db
-    environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: driver_service_db
-      MYSQL_INITDB_SKIP_TZINFO: 1
+  # --- API GATEWAY (PORT 4000) ---
+  api-gateway:
+    build: ./api-gateway
     ports:
-      - "3311:3306"
-    volumes:
-      - ./driver_service_db.sql:/docker-entrypoint-initdb.d/init.sql
-      - driver_db_data:/var/lib/mysql
+      - "4000:4000"  # <--- UBAH INI (Sebelumnya "4000:8000")
+    depends_on:
+      - user-service
+      - restaurant-service
+      - order-service
+      - payment-service
+      - driver-service
     networks:
-      - iae-network
-    restart: unless-stopped
-    command: --max_connections=1000 --max_allowed_packet=256M
+      - app-network 
+
+  # --- FRONTEND ---
+  frontend:
+    build: ./3-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - api-gateway
+    networks:
+      - app-network
 
 networks:
-  iae-network:
+  app-network:
     driver: bridge
-
-volumes:
-  user_db_data:
-  restaurant_db_data:
-  order_db_data:
-  payment_db_data:
-  driver_db_data:
