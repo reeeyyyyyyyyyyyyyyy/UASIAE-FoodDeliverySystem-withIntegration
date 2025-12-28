@@ -45,7 +45,7 @@ def login_rest(req: LoginRequest, db: Session = Depends(database.get_db)):
     if not user or not schema.verify_password(req.password, user.password):
         raise HTTPException(status_code=400, detail="Invalid credentials")
     
-    # Simpan User ID di 'sub' (subject) token
+    # Simpan User ID di 'sub' token
     token = schema.create_access_token({"sub": str(user.id), "role": user.role, "id": user.id})
     
     return {
@@ -88,6 +88,11 @@ def register_rest(req: RegisterRequest, db: Session = Depends(database.get_db)):
         }
     }
 
+@app.get("/users/admin/all")
+def get_all_users_admin(db: Session = Depends(database.get_db)):
+    users = db.query(models.User).all()
+    return {"status": "success", "data": users}
+
 # --- UPDATE PENTING: GET REAL PROFILE FROM DB ---
 @app.get("/users/profile/me")
 def get_me(authorization: str = Header(None), db: Session = Depends(database.get_db)):
@@ -118,6 +123,96 @@ def get_me(authorization: str = Header(None), db: Session = Depends(database.get
 # --- GRAPHQL ENDPOINT ---
 graphql_app = GraphQLRouter(schema.schema)
 app.include_router(graphql_app, prefix="/graphql")
+
+# --- HELPER: GET CURRENT USER ---
+def get_current_user_id(authorization: str = Header(None)):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing Token")
+    try:
+        token = authorization.split(" ")[1]
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload.get("sub")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid Token")
+
+# --- ADDRESS ENDPOINTS ---
+
+class AddressCreate(BaseModel):
+    label: str
+    full_address: str
+    latitude: str = None
+    longitude: str = None
+    is_default: bool = False
+
+@app.get("/users/addresses")
+def get_addresses(
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db)
+):
+    addresses = db.query(models.Address).filter(models.Address.user_id == user_id).all()
+    return {"status": "success", "data": addresses}
+
+@app.post("/users/addresses")
+def create_address(
+    addr: AddressCreate,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db)
+):
+    if addr.is_default:
+        # Set other addresses to non-default
+        db.query(models.Address).filter(models.Address.user_id == user_id).update({"is_default": 0})
+    
+    new_addr = models.Address(
+        user_id=user_id,
+        label=addr.label,
+        full_address=addr.full_address,
+        latitude=addr.latitude,
+        longitude=addr.longitude,
+        is_default=1 if addr.is_default else 0
+    )
+    db.add(new_addr)
+    db.commit()
+    db.refresh(new_addr)
+    return {"status": "success", "data": new_addr}
+
+@app.put("/users/addresses/{address_id}")
+def update_address(
+    address_id: int,
+    addr: AddressCreate,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db)
+):
+    address = db.query(models.Address).filter(models.Address.id == address_id, models.Address.user_id == user_id).first()
+    if not address:
+        raise HTTPException(status_code=404, detail="Address not found")
+        
+    if addr.is_default:
+        # Set other addresses to non-default
+        db.query(models.Address).filter(models.Address.user_id == user_id).update({"is_default": 0})
+        
+    address.label = addr.label
+    address.full_address = addr.full_address
+    address.latitude = addr.latitude
+    address.longitude = addr.longitude
+    address.is_default = 1 if addr.is_default else 0
+    
+    db.commit()
+    db.refresh(address)
+    return {"status": "success", "data": address}
+
+@app.delete("/users/addresses/{address_id}")
+def delete_address(
+    address_id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(database.get_db)
+):
+    address = db.query(models.Address).filter(models.Address.id == address_id, models.Address.user_id == user_id).first()
+    if not address:
+        raise HTTPException(status_code=404, detail="Address not found")
+        
+    db.delete(address)
+    db.commit()
+    return {"status": "success", "message": "Address deleted"}
 
 @app.get("/healthz")
 def healthz():

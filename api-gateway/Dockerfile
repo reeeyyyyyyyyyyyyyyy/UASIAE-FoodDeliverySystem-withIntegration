@@ -1,19 +1,15 @@
-# Gunakan image Python yang ringan
-FROM python:3.9-slim
+FROM node:18-alpine
 
-# Set working directory
 WORKDIR /app
 
-# Copy requirements dan install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY package*.json ./
 
-# Copy seluruh source code ke dalam container
+RUN npm install
+
 COPY . .
 
-# Expose port 4000 (sesuai request lama)
-EXPOSE 4000
+RUN npm run build
 
-# Jalankan server uvicorn
-# Host 0.0.0.0 agar bisa diakses dari luar container
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4000"]
+EXPOSE 3000
+
+CMD ["npm", "start"]

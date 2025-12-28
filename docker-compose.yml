@@ -49,19 +49,27 @@ services:
       - DATABASE_URL=mysql+pymysql://root:root@user_db:3306/user_service_db
       - SECRET_KEY=kunci_rahasia_project_ini_harus_sama_semua
       - ALGORITHM=HS256
+    volumes:
+      - ./user-service:/app
     depends_on:
       - user_db
     networks:
       - app-network
+    ports:
+      - "4001:8000"
 
   restaurant-service:
     build: ./restaurant-service
     environment:
       - DATABASE_URL=mysql+pymysql://root:root@restaurant_db:3306/restaurant_service_db
+    volumes:
+      - ./restaurant-service:/app
     depends_on:
       - restaurant_db
     networks:
       - app-network
+    ports:
+      - "4002:8000"
 
   order-service:
     build: ./order-service
@@ -69,10 +77,14 @@ services:
       - DATABASE_URL=mysql+pymysql://root:root@order_db:3306/order_service_db
       - SECRET_KEY=kunci_rahasia_project_ini_harus_sama_semua
       - ALGORITHM=HS256
+    volumes:
+      - ./order-service:/app
     depends_on:
       - order_db
     networks:
       - app-network
+    ports:
+      - "4003:8000"
 
   payment-service:
     build: ./payment-service
@@ -80,10 +92,14 @@ services:
       - DATABASE_URL=mysql+pymysql://root:root@payment_db:3306/payment_service_db
       - SECRET_KEY=kunci_rahasia_project_ini_harus_sama_semua
       - ALGORITHM=HS256
+    volumes:
+      - ./payment-service:/app
     depends_on:
       - payment_db
     networks:
       - app-network
+    ports:
+      - "4004:8000"
 
   driver-service:
     build: ./driver-service
@@ -91,16 +107,20 @@ services:
       - DATABASE_URL=mysql+pymysql://root:root@driver_db:3306/driver_service_db
       - SECRET_KEY=kunci_rahasia_project_ini_harus_sama_semua
       - ALGORITHM=HS256
+    volumes:
+      - ./driver-service:/app
     depends_on:
       - driver_db
     networks:
       - app-network
+    ports:
+      - "4005:8000"
 
   # --- API GATEWAY (PORT 4000) ---
   api-gateway:
     build: ./api-gateway
     ports:
-      - "4000:4000"  # <--- UBAH INI (Sebelumnya "4000:8000")
+      - "4000:3000"
     depends_on:
       - user-service
       - restaurant-service
@@ -108,7 +128,7 @@ services:
       - payment-service
       - driver-service
     networks:
-      - app-network 
+      - app-network
 
   # --- FRONTEND ---
   frontend:
