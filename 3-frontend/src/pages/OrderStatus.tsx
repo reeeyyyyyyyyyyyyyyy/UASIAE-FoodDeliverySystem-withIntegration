@@ -88,6 +88,23 @@ export const OrderStatus: React.FC = () => {
     return index >= 0 ? index : 0;
   };
 
+  if (order?.status === 'CANCELLED') {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full text-center">
+          <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+            <XCircle className="w-8 h-8 text-red-600" />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">Pesanan Dibatalkan</h1>
+          <p className="text-gray-600 mb-6">Pesanan #{order.order_id} telah dibatalkan.</p>
+          <Button onClick={() => navigate('/')} className="w-full">
+            Kembali ke Beranda
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-orange-50 via-white to-green-50 flex items-center justify-center">
@@ -195,16 +212,14 @@ export const OrderStatus: React.FC = () => {
                         scale: index === currentStepIndex ? 1.2 : 1,
                         backgroundColor: isActive ? getStatusColor(step.color).replace('bg-', '') : '#e5e7eb',
                       }}
-                      className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold mb-2 shadow-lg ${
-                        index === currentStepIndex ? 'ring-4 ring-orange-200' : ''
-                      } ${isActive ? getStatusColor(step.color) : 'bg-gray-300'}`}
+                      className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold mb-2 shadow-lg ${index === currentStepIndex ? 'ring-4 ring-orange-200' : ''
+                        } ${isActive ? getStatusColor(step.color) : 'bg-gray-300'}`}
                     >
                       <Icon className="w-5 h-5" />
                     </motion.div>
                     <span
-                      className={`text-xs font-medium text-center max-w-[90px] ${
-                        isActive ? 'text-gray-900' : 'text-gray-500'
-                      }`}
+                      className={`text-xs font-medium text-center max-w-[90px] ${isActive ? 'text-gray-900' : 'text-gray-500'
+                        }`}
                     >
                       {step.label}
                     </span>
@@ -341,8 +356,36 @@ export const OrderStatus: React.FC = () => {
             className="space-y-4"
           >
             <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg p-6">
-              <h3 className="font-semibold text-gray-900 mb-4">Aksi</h3>
+              <h3 className="font-semibold text-gray-900 mb-4">Aksi v2 (Sts: {order.status})</h3>
               <div className="space-y-3">
+                {(order.status === 'PENDING_PAYMENT' || order.status === 'PENDING') && (
+                  <>
+                    <Button
+                      variant="primary"
+                      onClick={() => navigate(`/payment/${order.order_id}`)}
+                      className="w-full justify-center bg-orange-600 hover:bg-orange-700"
+                    >
+                      Lanjut Pembayaran
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={async () => {
+                        if (!window.confirm('Batalkan pesanan ini?')) return;
+                        try {
+                          await orderAPI.cancelOrder(order.order_id);
+                          // Refresh logic: reload or navigate? 
+                          // Best to reload to see updated status "Cancelled"
+                          window.location.reload();
+                        } catch (e) {
+                          alert('Gagal membatalkan');
+                        }
+                      }}
+                      className="w-full justify-center border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300"
+                    >
+                      Batalkan Pesanan
+                    </Button>
+                  </>
+                )}
                 <Button
                   variant="outline"
                   onClick={() => navigate('/orders')}

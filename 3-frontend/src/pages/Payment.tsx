@@ -94,6 +94,21 @@ export const Payment: React.FC = () => {
     }
   };
 
+  const handleCancelOrder = async () => {
+    if (!order) return;
+
+    try {
+      setIsProcessing(true);
+      await orderAPI.cancelOrder(order.order_id);
+      navigate('/orders');
+    } catch (error: any) {
+      console.error('Failed to cancel order:', error);
+      // alert('Failed to cancel order'); // Optional
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="container mx-auto px-4 py-8">
@@ -225,7 +240,7 @@ export const Payment: React.FC = () => {
                   onChange={(e) => setPaymentMethod(e.target.value)}
                   className="mr-3"
                 />
-                <span className="font-medium text-gray-800">Bank Transfer</span>
+                <span className="font-medium text-gray-800">Bank Transfer (DOS Wallet)</span>
               </label>
               <label className="flex items-center p-4 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
                 <input
@@ -245,11 +260,11 @@ export const Payment: React.FC = () => {
           <div className="flex gap-4">
             <Button
               variant="outline"
-              onClick={() => navigate(-1)}
+              onClick={handleCancelOrder}
               disabled={isProcessing}
-              className="flex-1"
+              className="flex-1 bg-red-50 text-red-600 border-red-200 hover:bg-red-100"
             >
-              Cancel
+              {isProcessing ? 'Cancelling...' : 'Cancel Order'}
             </Button>
             <Button
               onClick={handleConfirmPayment}

@@ -91,7 +91,29 @@ def register_rest(req: RegisterRequest, db: Session = Depends(database.get_db)):
 @app.get("/users/admin/all")
 def get_all_users_admin(db: Session = Depends(database.get_db)):
     users = db.query(models.User).all()
-    return {"status": "success", "data": users}
+    data = []
+    for u in users:
+        # Fetch all addresses
+        addrs = db.query(models.Address).filter(models.Address.user_id == u.id).all()
+        addresses_data = [
+            {
+                "id": a.id,
+                "label": a.label,
+                "full_address": a.full_address,
+                "is_default": bool(a.is_default)
+            } for a in addrs
+        ]
+        
+        data.append({
+            "id": u.id,
+            "name": u.name,
+            "email": u.email,
+            "role": u.role,
+            "phone": u.phone,
+            "created_at": u.created_at, # Added created_at
+            "addresses": addresses_data # Return array
+        })
+    return {"status": "success", "data": data}
 
 # --- UPDATE PENTING: GET REAL PROFILE FROM DB ---
 @app.get("/users/profile/me")

@@ -39,7 +39,7 @@ api.interceptors.response.use(
         error.message = error.message || 'Network error. Please try again.';
       }
     }
-    
+
     // Handle HTTP errors
     if (error.response?.status === 401) {
       // Token expired or invalid - only redirect if not already on login/register page
@@ -49,7 +49,7 @@ api.interceptors.response.use(
         window.location.href = '/';
       }
     }
-    
+
     return Promise.reject(error);
   }
 );
@@ -144,6 +144,10 @@ export const orderAPI = {
     const response = await api.get(`/orders/${orderId}`);
     return response.data;
   },
+  cancelOrder: async (orderId: number) => {
+    const response = await api.post(`/orders/${orderId}/cancel`);
+    return response.data;
+  },
   // Admin endpoints
   getSalesStatistics: async () => {
     const response = await api.get('/orders/admin/sales/statistics');
@@ -233,6 +237,10 @@ export const driverAPI = {
     const response = await api.post(`/orders/${orderId}/complete`);
     return response.data;
   },
+  getHistory: async () => {
+    const response = await api.get('/orders/driver/history');
+    return response.data;
+  },
   // Admin endpoints for driver management
   getAllDrivers: async () => {
     const response = await api.get('/drivers/admin/all');
@@ -251,7 +259,7 @@ export const driverAPI = {
     return response.data;
   },
   markDriverEarningsAsPaid: async (driverId: number) => {
-    const response = await api.post(`/drivers/admin/salaries/mark-as-paid/${driverId}`);
+    const response = await api.post(`/drivers/admin/salaries/pay/${driverId}`);
     return response.data;
   },
 };

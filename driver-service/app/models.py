@@ -8,12 +8,17 @@ class Driver(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, nullable=False, unique=True) # Link ke User Service
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, nullable=False, unique=True) # Link ke User Service
     vehicle_type = Column(String(50), nullable=False)
     vehicle_number = Column(String(50), nullable=False)
     
     is_available = Column(Boolean, default=True)
     is_on_job = Column(Boolean, default=False)
-    total_earnings = Column(DECIMAL(10, 2), default=0.00)
+    
+    # LEGACY COMPATIBILITY: total_earnings IS THE WALLET (UNPAID AMOUNT).
+    # It gets reset to 0 after salary payment.
+    total_earnings = Column(DECIMAL(10, 2), default=0.00) 
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now(), server_default=func.now())

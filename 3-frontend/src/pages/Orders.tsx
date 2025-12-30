@@ -95,9 +95,27 @@ export const Orders: React.FC = () => {
     );
   }
 
+  /* ... inside Orders component ... */
+  const handleCancel = async (e: React.MouseEvent, orderId: number) => {
+    e.stopPropagation(); // Prevent card click
+    if (!window.confirm('Apakah Anda yakin ingin membatalkan pesanan ini?')) return;
+    try {
+      await orderAPI.cancelOrder(orderId);
+      // Refresh
+      const response = await orderAPI.getOrders();
+      if (response.status === 'success') {
+        setOrders(response.data || []);
+      }
+    } catch (error) {
+      console.error('Failed to cancel:', error);
+      alert('Gagal membatalkan pesanan');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 via-white to-green-50">
       <div className="container mx-auto px-4 py-8">
+
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -138,13 +156,15 @@ export const Orders: React.FC = () => {
           >
             {orders.map((order, index) => {
               const statusConfig = getStatusConfig(order.status);
+              const isPending = order.status === 'PENDING_PAYMENT' || order.status === 'PENDING';
+
               return (
                 <motion.div
                   key={order.order_id}
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.1 }}
-                  className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg hover:shadow-xl transition-all cursor-pointer overflow-hidden group"
+                  className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg hover:shadow-xl transition-all cursor-pointer overflow-hidden group flex flex-col justify-between"
                   onClick={() => navigate(`/orders/${order.order_id}`)}
                 >
                   <div className="p-6">
@@ -184,10 +204,34 @@ export const Orders: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between text-orange-600 text-sm font-medium group-hover:gap-2 transition-all">
-                      <span>Lihat Detail</span>
-                      <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
-                    </div>
+                    {isPending ? (
+                      <div className="flex gap-2 mt-4 pt-4 border-t border-gray-100">
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          className="flex-1"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/payment/${order.order_id}`);
+                          }}
+                        >
+                          Bayar
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300"
+                          onClick={(e) => handleCancel(e, order.order_id)}
+                        >
+                          Batalkan
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between text-orange-600 text-sm font-medium group-hover:gap-2 transition-all mt-4 pt-4 border-t border-gray-100">
+                        <span>Lihat Detail</span>
+                        <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                      </div>
+                    )}
                   </div>
                 </motion.div>
               );
@@ -195,6 +239,6 @@ export const Orders: React.FC = () => {
           </motion.div>
         )}
       </div>
-    </div>
+    </div >
   );
 };

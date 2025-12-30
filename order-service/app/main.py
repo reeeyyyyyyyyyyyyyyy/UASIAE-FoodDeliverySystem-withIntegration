@@ -55,7 +55,15 @@ def get_my_orders(
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db)
 ):
-    orders = db.query(Order).filter(Order.user_id == user_id).order_by(Order.created_at.desc()).all()
+    # Filter OUT completed/cancelled if user only wants "Active" or explicit history?
+    # User said: "Pesanan still comes to my order... harusnya tidak".
+    # Assuming "My Orders" usually implies Active or All.
+    # If user wants them GONE, filter CANCELLED.
+    # User requested to see History ("Selesai") and interact with Pending.
+    # Showing ALL orders sorted by Date.
+    orders = db.query(Order).filter(
+        Order.user_id == user_id
+    ).order_by(Order.created_at.desc()).all()
     
     # Fetch Restaurants for name mapping
     restaurant_map = {}
@@ -206,47 +214,62 @@ def create_order(
 
 @app.get("/orders/available")
 def get_available_orders(
+    request: Request, # Need request for Token
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db)
 ):
-    # Available = PAID or PREPARING
-    # TODO: Also filter by is_open? Restaurant service integration for that if strictly needed.
     orders = db.query(Order).filter(Order.status.in_([STATUS_PAID, STATUS_PREPARING]), Order.driver_id == None).all()
     
-    # Needs restaurant names
     restaurant_map = {}
+    user_map = {} # Map for User Info
+
     try:
         res = requests.get(f"{RESTAURANT_SERVICE_URL}/restaurants")
         if res.status_code == 200:
             for r in res.json()['data']:
                 restaurant_map[r['id']] = r['name']
+
+        # Fetch Users for Real Names & Addresses
+        USER_SERVICE_URL = "http://user-service:8000"
+        u_res = requests.get(f"{USER_SERVICE_URL}/users/admin/all")
+        if u_res.status_code == 200:
+            for u in u_res.json()['data']:
+                 user_map[u['id']] = u
     except:
         pass
 
     data = []
     for o in orders:
-        # Fetch Items
         items = db.query(OrderItem).filter(OrderItem.order_id == o.id).all()
         items_data = [
-            {
-                "menu_item_name": i.menu_item_name,
-                "quantity": i.quantity,
-                "price": float(i.price)
-            } for i in items
+            {"menu_item_name": i.menu_item_name, "quantity": i.quantity, "price": float(i.price)} for i in items
         ]
 
+        # Improved Placeholder using User Map
+        c_name = f"User {o.user_id}" 
+        c_addr = f"Address {o.address_id}" 
+        
+        user_info = user_map.get(o.user_id)
+        if user_info:
+            c_name = user_info['name']
+            # Find address
+            for addr in user_info.get('addresses', []):
+                if addr['id'] == o.address_id:
+                    c_addr = addr['full_address']
+                    break
+
         data.append({
-            "order_id": o.id, # Critical
+            "order_id": o.id, 
             "id": o.id,
             "restaurant_name": restaurant_map.get(o.restaurant_id, f"Restaurant {o.restaurant_id}"),
-            "restaurant_address": f"Restaurant {o.restaurant_id} Address",
-            "delivery_address": f"Address {o.address_id}",
-            "customer_name": "Customer", # Helper
-            "customer_address": f"Address {o.address_id}", # Helper
+            "restaurant_address": f"Resto Address",
+            "delivery_address": c_addr,
+            "customer_name": c_name, 
+            "customer_address": c_addr, 
             "total_price": float(o.total_price),
             "status": o.status,
             "created_at": o.created_at,
-            "items": items_data # Added items
+            "items": items_data
         })
     return {"status": "success", "data": data}
 
@@ -255,27 +278,35 @@ def get_my_driver_orders(
     user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db)
 ):
-    orders = db.query(Order).filter(Order.driver_id == user_id).order_by(Order.created_at.desc()).all()
+    # Filter OUT completed orders (ACTIVE ONLY)
+    orders = db.query(Order).filter(
+        Order.driver_id == user_id,
+        Order.status.notin_([STATUS_DELIVERED, STATUS_COMPLETED, STATUS_CANCELLED])
+    ).order_by(Order.created_at.desc()).all()
     
     restaurant_map = {}
+    user_map = {} # Map for User Info
+
     try:
         res = requests.get(f"{RESTAURANT_SERVICE_URL}/restaurants")
         if res.status_code == 200:
             for r in res.json()['data']:
                 restaurant_map[r['id']] = r['name']
+        
+        # Fetch Users
+        USER_SERVICE_URL = "http://user-service:8000"
+        u_res = requests.get(f"{USER_SERVICE_URL}/users/admin/all")
+        if u_res.status_code == 200:
+            for u in u_res.json()['data']:
+                 user_map[u['id']] = u
     except:
         pass
 
     data = []
     for o in orders:
-        # Fetch Items
         items = db.query(OrderItem).filter(OrderItem.order_id == o.id).all()
         items_data = [
-            {
-                "menu_item_name": i.menu_item_name,
-                "quantity": i.quantity,
-                "price": float(i.price)
-            } for i in items
+            {"menu_item_name": i.menu_item_name, "quantity": i.quantity, "price": float(i.price)} for i in items
         ]
 
         # Normalize Status for Frontend (Legacy fix)
@@ -283,18 +314,31 @@ def get_my_driver_orders(
         if o.status == "ON_DELIVERY":
             display_status = "ON_THE_WAY"
 
+        # Resolve Customer Info
+        customer_name = f"User {o.user_id}"
+        customer_address = f"Address {o.address_id}"
+        
+        user_info = user_map.get(o.user_id)
+        if user_info:
+            customer_name = user_info['name']
+            # Find address
+            for addr in user_info.get('addresses', []):
+                if addr['id'] == o.address_id:
+                    customer_address = addr['full_address']
+                    break
+
         data.append({
             "order_id": o.id,
             "id": o.id,
             "restaurant_name": restaurant_map.get(o.restaurant_id, f"Restaurant {o.restaurant_id}"),
             "restaurant_address": "Jakarta", 
-            "delivery_address": f"Address {o.address_id}",
-            "customer_name": "Customer", # Helper
-            "customer_address": f"Address {o.address_id}", # Helper
+            "delivery_address": customer_address,
+            "customer_name": customer_name,
+            "customer_address": customer_address,
             "total_price": float(o.total_price),
-            "status": display_status, # Normalized
+            "status": display_status,
             "created_at": o.created_at,
-            "items": items_data # Added items
+            "items": items_data
         })
     return {"status": "success", "data": data}
 
@@ -337,7 +381,9 @@ def complete_order_driver(
     # --- INTEGRASI: Update Gaji Driver ---
     try:
         earning = float(order.total_price) * 0.10
-        requests.post(
+        print(f"DEBUG: Computing Earning for Driver {user_id}. Order {order.id} Price {order.total_price} -> Earning {earning}")
+        
+        res = requests.post(
             f"{DRIVER_SERVICE_URL}/internal/drivers/earnings",
             json={
                 "user_id": user_id,
@@ -345,10 +391,35 @@ def complete_order_driver(
                 "order_id": order.id
             }
         )
+        print(f"DEBUG: Driver Service Response: {res.status_code} {res.text}")
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to record earning (Request Error): {e}")
+        if e.response:
+             print(f"Response Body: {e.response.text}")
     except Exception as e:
         print(f"Failed to record earning: {e}")
     
     return {"status": "success", "message": "Order completed"}
+
+@app.post("/orders/{order_id}/cancel") # Use POST or PUT
+def cancel_order(
+    order_id: int,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db)
+):
+    order = db.query(Order).filter(Order.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+        
+    if order.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Not your order")
+        
+    if order.status not in [STATUS_PENDING]:
+        raise HTTPException(status_code=400, detail="Cannot cancel order in this status")
+        
+    order.status = STATUS_CANCELLED
+    db.commit()
+    return {"status": "success", "message": "Order cancelled"}
 
 @app.get("/orders/{order_id}")
 def get_order_by_id(
@@ -404,14 +475,31 @@ def get_order_by_id(
         except Exception as e:
             print(f"Failed to fetch user info: {e}")
 
-    # 3. Driver Details (Placeholder for now, or fetch if driver_id exists)
+     # 3. Driver Details
     if order.driver_id:
-         # TODO: Fetch from Driver Service
-         driver_details = {
-             "name": "Driver Assigned", 
-             "phone": "08123456789", 
-             "vehicle": "Motorcycle" 
-         }
+         # Call Driver Service Internal Endpoint
+         DRIVER_SERVICE_URL = "http://driver-service:8000"
+         try:
+             d_res = requests.get(f"{DRIVER_SERVICE_URL}/internal/drivers/details/{order.driver_id}")
+             if d_res.status_code == 200:
+                 driver_details = d_res.json()
+             else:
+                 driver_details = {
+                     "name": f"Driver {order.driver_id}", 
+                     "phone": "-", 
+                     "vehicle": "Unknown",
+                     "vehicle_number": "-",
+                     "vehicle_type": "Unknown"
+                 }
+         except Exception as e:
+             print(f"Failed to fetch driver details: {e}")
+             driver_details = {
+                 "name": "Driver (Error)", 
+                 "phone": "-", 
+                 "vehicle": "Unknown",
+                 "vehicle_number": "-",
+                 "vehicle_type": "Unknown"
+             }
 
     # Normalize Status for Frontend (Legacy fix)
     display_status = order.status
@@ -423,23 +511,26 @@ def get_order_by_id(
         "order_id": order.id,
         "user_id": order.user_id,
         "restaurant_id": order.restaurant_id,
+        "restaurant_name": restaurant_name, # Flattened for Frontend
+        "customer_name": customer_name, # Flattened 
+        "customer_address": customer_address, # Flattened for Payment Page
         "address_id": order.address_id,
-        "status": display_status, # Normalized
+        "status": display_status, 
         "total_price": float(order.total_price),
         "created_at": order.created_at,
-        "estimated_delivery": order.estimated_delivery_time, # Frontend key: estimated_delivery
-        "delivery_address": customer_address, # Frontend key: delivery_address
-        "restaurant_details": { # Frontend key: restaurant_details
+        "estimated_delivery": order.estimated_delivery_time,
+        "delivery_address": customer_address, 
+        "restaurant_details": {
             "name": restaurant_name,
             "address": restaurant_address
         },
-        "driver_details": driver_details, # Frontend key: driver_details
+        "driver_details": driver_details, 
         "items": [
             {
                 "id": i.id,
                 "menu_item_id": i.menu_item_id,
                 "menu_item_name": i.menu_item_name,
-                "name": i.menu_item_name, # Fallback
+                "name": i.menu_item_name, 
                 "quantity": i.quantity,
                 "price": float(i.price)
             } for i in items
@@ -447,6 +538,68 @@ def get_order_by_id(
     }
     
     return {"status": "success", "data": order_data}
+
+@app.get("/orders/driver/history")
+def get_driver_order_history(
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db)
+):
+    # Fetch Completed Orders
+    orders = db.query(Order).filter(
+        Order.driver_id == user_id,
+        Order.status.in_([STATUS_DELIVERED, STATUS_COMPLETED])
+    ).order_by(Order.created_at.desc()).all()
+    
+    # ... (Same mapping logic as others, simplified for brevity or reuse) ...
+    # Reuse mapping logic ideally, but for now duplicate for safety/speed
+    restaurant_map = {}
+    user_map = {} # Map for User Info
+    
+    try:
+        res = requests.get(f"{RESTAURANT_SERVICE_URL}/restaurants")
+        if res.status_code == 200:
+            for r in res.json()['data']:
+                restaurant_map[r['id']] = r['name']
+                
+        # Fetch Users for Real Names & Addresses
+        USER_SERVICE_URL = "http://user-service:8000"
+        u_res = requests.get(f"{USER_SERVICE_URL}/users/admin/all")
+        if u_res.status_code == 200:
+            for u in u_res.json()['data']:
+                 user_map[u['id']] = u
+    except:
+        pass
+        
+    data = []
+    for o in orders:
+        items = db.query(OrderItem).filter(OrderItem.order_id == o.id).all()
+        items_data = [{"menu_item_name": i.menu_item_name, "quantity": i.quantity, "price": float(i.price)} for i in items]
+        
+        # Resolve Customer Info
+        customer_name = f"User {o.user_id}"
+        customer_address = f"Address {o.address_id}"
+        
+        user_info = user_map.get(o.user_id)
+        if user_info:
+            customer_name = user_info['name']
+            # Find address
+            for addr in user_info.get('addresses', []):
+                if addr['id'] == o.address_id:
+                    customer_address = addr['full_address']
+                    break
+        
+        data.append({
+            "order_id": o.id,
+            "id": o.id,
+            "restaurant_name": restaurant_map.get(o.restaurant_id, f"Restaurant {o.restaurant_id}"),
+            "customer_name": customer_name, 
+            "customer_address": customer_address, 
+            "total_price": float(o.total_price),
+            "status": o.status,
+            "created_at": o.created_at,
+            "items": items_data
+        })
+    return {"status": "success", "data": data}
 
 # --- TAMBAHAN UNTUK INTEGRASI (Internal API) ---
 
@@ -503,46 +656,126 @@ def get_sales_statistics(db: Session = Depends(get_db)):
     # Using coalesce to return 0 if None
     total_sales = db.query(func.coalesce(func.sum(Order.total_price), 0)).filter(Order.status != STATUS_CANCELLED).scalar()
     
-    # Active Orders (Not Completed/Delivered/Cancelled)
-    active_orders = db.query(Order).filter(
+    # Completed Orders (DELIVERED or COMPLETED)
+    completed_orders = db.query(Order).filter(Order.status.in_([STATUS_DELIVERED, STATUS_COMPLETED])).count()
+
+    # Pending Orders (PENDING, PAID, PREPARING, ON_THE_WAY)
+    pending_orders = db.query(Order).filter(
         Order.status.in_([STATUS_PENDING, STATUS_PAID, STATUS_PREPARING, STATUS_ON_DELIVERY])
     ).count()
+
+    # Calculate Average Order Value
+    avg_order = 0
+    if total_orders > 0:
+        avg_order = float(total_sales or 0) / total_orders
+
+    # Daily Statistics (Last 7 Days)
+    # MySQL: DATE(created_at)
+    # SQLAlchemy: func.date(...)
+    from datetime import timedelta
+    
+    # Simple Group By Date
+    daily_stats_query = db.query(
+        func.date(Order.created_at).label('date'),
+        func.count(Order.id).label('count'),
+        func.sum(Order.total_price).label('revenue')
+    ).filter(Order.status != STATUS_CANCELLED).group_by(func.date(Order.created_at)).all()
+    
+    daily_statistics = [
+        {
+            "date": str(s.date),
+            "total_orders": s.count,
+            "total_sales": float(s.revenue or 0)
+        } for s in daily_stats_query
+    ]
 
     return {
         "status": "success", 
         "data": {
-            "totalSales": float(total_sales),
-            "totalOrders": total_orders,
-            "activeOrders": active_orders
+            "total_orders": total_orders,
+            "total_revenue": float(total_sales or 0),
+            "completed_orders": completed_orders,
+            "pending_orders": pending_orders,
+            "average_order_value": avg_order,
+            "daily_statistics": daily_statistics
         }
     }
 
 @app.get("/orders/admin/sales/restaurants")
 def get_restaurant_sales(db: Session = Depends(get_db)):
     # Group orders by restaurant_id and sum total_price
-    results = db.query(
+    # 1. Get Sales Data (Grouped)
+    sales_results = db.query(
         Order.restaurant_id,
         func.count(Order.id).label("total_orders"),
         func.sum(Order.total_price).label("total_sales")
     ).filter(Order.status != STATUS_CANCELLED).group_by(Order.restaurant_id).all()
     
-    # We only have restaurant_id here. Frontend typically maps this using restaurant list.
-    data = [
-        {
-            "restaurant_id": r.restaurant_id,
-            "restaurant_name": f"Restaurant {r.restaurant_id}", # Placeholder if name needed
-            "total_orders": r.total_orders,
-            "total_sales": float(r.total_sales or 0)
-        }
-        for r in results
-    ]
+    print(f"DEBUG SALES RESULTS: {sales_results}") # DEBUG LOG
+    
+    sales_map = {r.restaurant_id: {"orders": r.total_orders, "sales": float(r.total_sales or 0)} for r in sales_results}
+    print(f"DEBUG SALES MAP: {sales_map}") # DEBUG LOG
+
+    # 2. Fetch All Restaurants
+    all_restaurants = []
+    try:
+        res = requests.get(f"{RESTAURANT_SERVICE_URL}/restaurants")
+        if res.status_code == 200:
+            all_restaurants = res.json()['data']
+    except Exception as e:
+        print(f"Failed to fetch restaurants: {e}")
+        # Fallback: only show those with sales if API fails
+        data = []
+        for r_id, stats in sales_map.items():
+             data.append({
+                "restaurant_id": r_id,
+                "restaurant_name": f"Resto {r_id}",
+                "total_orders": stats['orders'],
+                "total_revenue": stats['sales'] # FIXED
+            })
+        return {"status": "success", "data": data}
+
+    # 3. Merge Data
+    data = []
+    for r in all_restaurants:
+        r_id = r['id']
+        stats = sales_map.get(r_id, {"orders": 0, "sales": 0})
+        data.append({
+            "restaurant_id": r_id,
+            "restaurant_name": r['name'],
+            "total_orders": stats['orders'],
+            "total_revenue": stats['sales'] # FIXED: total_sales -> total_revenue
+        })
+        
     return {"status": "success", "data": data}
+
+# --- NEW INTERNAL ENDPOINT FOR DRIVER SERVICE ---
+@app.get("/internal/orders/driver/{driver_id}")
+def get_driver_active_orders_internal(driver_id: int, db: Session = Depends(get_db)):
+    # Return orders that are active (ON_THE_WAY, PREPARING, etc) assigned to this driver
+    # Legacy logic: Active = Not Completed/Delivered/Cancelled
+    orders = db.query(Order).filter(
+        Order.driver_id == driver_id,
+        Order.status.notin_([STATUS_DELIVERED, STATUS_COMPLETED, STATUS_CANCELLED])
+    ).all()
+    
+    return {
+        "status": "success",
+        "data": [
+            {
+                "id": o.id,
+                "order_id": o.id,
+                "status": o.status,
+                "total_price": float(o.total_price)
+            } for o in orders
+        ]
+    }
 
 @app.get("/orders/admin/all")
 def get_all_orders_admin(db: Session = Depends(get_db)):
     orders = db.query(Order).order_by(Order.created_at.desc()).all()
     
-    # 1. Fetch Maps (Optimized: Fetch all once instead of N+1)
+    # 1. Fetch Restaurant Map
     restaurant_map = {}
     try:
         r_res = requests.get(f"{RESTAURANT_SERVICE_URL}/restaurants")
@@ -552,12 +785,17 @@ def get_all_orders_admin(db: Session = Depends(get_db)):
     except:
         pass
 
-    # User Map is harder (no bulk endpoint usually), we'll do best effort or per-item if needed.
-    # ideally user-service should have internal bulk fetch. For MVP, we'll fetch individual or skip if fast.
-    # Let's skip heavy user fetching loop for list to avoid timeout, or mock if allowed. 
-    # But user specifically asked for "Customer" column fix.
-    # Let's use a placeholder or try to cache.
-    
+    # 2. Fetch User Map (For Customer and Driver Names)
+    user_map = {}
+    try:
+        USER_SERVICE_URL = "http://user-service:8000"
+        u_res = requests.get(f"{USER_SERVICE_URL}/users/admin/all")
+        if u_res.status_code == 200:
+            for u in u_res.json()['data']:
+                user_map[u['id']] = u # Store whole object
+    except Exception as e:
+        print(f"Failed to fetch user map: {e}")
+
     data = []
     for o in orders:
         # Normalize Status for Frontend (Legacy fix)
@@ -565,14 +803,26 @@ def get_all_orders_admin(db: Session = Depends(get_db)):
         if o.status == "ON_DELIVERY":
             display_status = "ON_THE_WAY"
             
+        # Resolved Names & Emails
+        c_name = user_map.get(o.user_id, {}).get('name', f"User {o.user_id}")
+        c_email = user_map.get(o.user_id, {}).get('email', "-")
+        
+        d_name = "Belum ditugaskan"
+        d_email = "-"
+        if o.driver_id:
+            d_name = user_map.get(o.driver_id, {}).get('name', f"Driver {o.driver_id}")
+            d_email = user_map.get(o.driver_id, {}).get('email', "-")
+
         data.append({
-            "id": o.id, # Admin table uses this
+            "id": o.id, 
             "order_id": o.id,
             "restaurant_name": restaurant_map.get(o.restaurant_id, f"Resto {o.restaurant_id}"),
-            "customer_name": f"User {o.user_id}", # To fix properly requires user-service bulk fetch
-            "driver_name": f"Driver {o.driver_id}" if o.driver_id else "Belum ditugaskan",
+            "customer_name": c_name, 
+            "customer_email": c_email,
+            "driver_name": d_name,
+            "driver_email": d_email,
             "total_price": float(o.total_price),
-            "status": display_status, # Use normalized status
+            "status": display_status, 
             "created_at": o.created_at
         })
         
@@ -589,13 +839,16 @@ def reset_order_data(db: Session = Depends(get_db)):
     db.query(OrderItem).delete()
     # Delete all Orders
     db.query(Order).delete()
-    # Assuming payments are mock or handled elsewhere? 
-    # If there's a payment table in order-service (not seen in models), delete it too.
-    # User said "payment dll dikosongi", but payment-service is separate.
-    # We will trust that payment-service reset is handled or not needed if mocked.
+    
+    # Reset Auto Increment (MySQL specific)
+    try:
+        db.execute("ALTER TABLE orders AUTO_INCREMENT = 1")
+        db.execute("ALTER TABLE order_items AUTO_INCREMENT = 1")
+    except Exception as e:
+        print(f"Warning: Could not reset AUTO_INCREMENT: {e}")
     
     db.commit()
-    return {"status": "success", "message": "Order data reset"}
+    return {"status": "success", "message": "Order data reset and IDs reset to 1"}
 
 graphql_app = GraphQLRouter(schema)
 app.include_router(graphql_app, prefix="/graphql")
